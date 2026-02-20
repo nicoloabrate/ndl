@@ -75,7 +75,7 @@ def get_njoy_ver():
     return njoyver
 
 
-def buildacelib(inpath, libpath, data, libext, particles,
+def build_ace_lib(inpath, libpath, data, libext, particles,
                 atom_relax=None, np=None, copyflag=True, binary=True,
                 njoypath=None, kerma=True):
     """
@@ -188,7 +188,7 @@ def par_ace_lib(args):
     args : list
         list of input file names to be processed and a tuple of arguments
         that allow to pass to this function the input argument of function
-        "buildacelib" (for more information, see args of this function)
+        "build_ace_lib" (for more information, see args of this function)
 
     Returns
     -------
@@ -605,7 +605,7 @@ def run_njoy(inp):
     return outstream
 
 
-def makeinput(datapath, pattern, part, libname, broad_temp=None, kerma=True,
+def make_input(datapath, pattern, part, libname, broad_temp=None, kerma=True,
               outpath=None, atomrelax_datapath=None, random=False,
               binary=True, newlibext=None):
     """
@@ -1114,7 +1114,7 @@ def build_njoy_deck(MAT, ASA, proj, libname, vers, tmp=None, kerma=None, binary=
     return outstr
 
 
-def convertxsdir(datapath, proj, libname, ndlpath, currpath=None):
+def convert_xsdir(datapath, proj, libname, ndlpath, currpath=None):
     '''
     Merge all .xsdir files and convert to .xsdata file.
 
@@ -1403,6 +1403,203 @@ def printime(start_time):
         elaps = "Elapsed time %f h." % (dt/3600)
 
     return elaps
+
+
+def _parse_endf_ctl_flexible(line):
+    """
+    Parse ENDF control fields from tail.
+    Supports:
+      - 80-col lines: MAT/MF/MT/NS in cols 67-80 (1-based) => [66:80]
+      - 75-col lines: MAT/MF/MT in cols 67-75 (1-based) => [66:75], NS missing
+
+    Returns (mat, mf, mt, ns_or_None) or None if not parseable.
+    """
+    n = len(line)
+
+    if n >= 80:
+        tail = line[66:80]
+        try:
+            mat = int(tail[0:4])
+            mf = int(tail[4:6])
+            mt = int(tail[6:9])
+            ns = int(tail[9:14])
+            return mat, mf, mt, ns
+        except Exception:
+            return None
+
+    if n >= 75:
+        tail = line[66:75]
+        try:
+            mat = int(tail[0:4])
+            mf = int(tail[4:6])
+            mt = int(tail[6:9])
+            return mat, mf, mt, None
+        except Exception:
+            return None
+
+    return None
+
+
+def _fmt_endf_line(data66, mat, mf, mt, ns):
+    """
+    Create a canonical 80-column ENDF line (plus newline):
+      cols 1-66:  data/comment (padded)
+      cols 67-70: MAT (4)
+      cols 71-72: MF  (2)
+      cols 73-75: MT  (3)
+      cols 76-80: NS  (5)
+    """
+    data = (data66[:66]).ljust(66)
+    tail = f"{mat:4d}{mf:2d}{mt:3d}{ns:5d}"
+    return f"{data}{tail}\n"
+
+
+def build_burnup_data(in_dir, out_dir=None, lib="endfb8", suffix="dec", 
+                        pattern="*.endf", recursive=False, encoding=None, skip_rev_lines=True, drop_unparsed=True,):
+    """
+    Build Serpent burnup auxiliary data tapes (.dec/.nfy/.sfy) by merging ENDF-6
+    single-material files.
+
+    Parameters
+    ----------
+    in_dir : str
+        Directory containing ENDF files to merge.
+    out_dir : str, optional
+        Directory where the merged file is written. If None, uses in_dir.
+    lib : str, optional
+        Output library tag used in file name, e.g. "endfb8".
+    suffix : str, optional
+        Output suffix: "dec", "nfy" or "sfy".
+    pattern : str, optional
+        Glob pattern to match input files, default "*.endf".
+    recursive : bool, optional
+        If True, search recursively for pattern.
+    encoding : str, optional
+        File encoding for reading. If None, tries utf-8 then latin-1.
+    skip_rev_lines : bool, optional
+        If True, skip lines whose first non-space character is '$' (e.g. $Rev::).
+    drop_unparsed : bool, optional
+        If True, drop lines that cannot be parsed for MAT/MF/MT.
+        (Recommended, because output must be consistent ENDF control-wise.)
+
+    Returns
+    -------
+    out_path : str
+        Absolute path of merged output file.
+
+    Raises
+    ------
+    NDLError
+        If no input files are found or suffix is invalid.
+    """
+    suffix = str(suffix).lower().strip()
+    if suffix not in ("dec", "nfy", "sfy"):
+        raise NDLError("suffix must be one of: 'dec', 'nfy', 'sfy'")
+
+    in_dir = os.path.abspath(in_dir)
+    if out_dir is None:
+        out_dir = in_dir
+    else:
+        out_dir = os.path.abspath(out_dir)
+        os.makedirs(out_dir, exist_ok=True)
+
+    if recursive:
+        files = sorted(glob.glob(os.path.join(in_dir, "**", pattern), recursive=True))
+    else:
+        files = sorted(glob.glob(os.path.join(in_dir, pattern), recursive=False))
+
+    files = [f for f in files if os.path.isfile(f)]
+    if len(files) == 0:
+        raise NDLError(f"No input files found in '{in_dir}' matching pattern '{pattern}'")
+
+    ZERO66 = " 0.000000+0 0.000000+0          0          0          0          0"
+
+    def is_send(mat, mf, mt): return (mat > 0) and (mf > 0) and (mt == 0)
+    def is_fend(mat, mf, mt): return (mat > 0) and (mf == 0) and (mt == 0)
+    def is_mend(mat, mf, mt): return (mat == 0) and (mf == 0) and (mt == 0)
+    def is_tend(mat, mf, mt): return (mat == -1) and (mf == 0) and (mt == 0)
+
+    ns_counter = {}  # key=(MAT, MF, MT) => running count
+    out_lines = []
+
+    # simple encoding fallback consistent with typical ENDF text
+    encodings_to_try = [encoding] if encoding else ["utf-8", "latin-1"]
+
+    dropped_tend = 0
+    skipped_rev = 0
+    unparsed = 0
+    kept = 0
+
+    for fp in files:
+        text = None
+        last_err = None
+        for enc in encodings_to_try:
+            try:
+                with open(fp, "r", encoding=enc, errors="strict") as fh:
+                    text = fh.read()
+                break
+            except Exception as e:
+                last_err = e
+        if text is None:
+            raise NDLError(f"Cannot read '{fp}' with encodings {encodings_to_try}: {last_err}")
+
+        for raw in text.splitlines(True):
+            line = raw.rstrip("\n")
+
+            if not line.strip():
+                continue
+
+            if skip_rev_lines and line.lstrip().startswith("$"):
+                skipped_rev += 1
+                continue
+
+            ctl = _parse_endf_ctl_flexible(line)
+            if ctl is None:
+                unparsed += 1
+                if drop_unparsed:
+                    continue
+                else:
+                    # keeping unparsed lines would break control structure; by default we drop
+                    continue
+
+            mat, mf, mt, _ns = ctl
+
+            # drop per-file TEND
+            if is_tend(mat, mf, mt):
+                dropped_tend += 1
+                continue
+
+            # normalize termination records
+            if is_send(mat, mf, mt):
+                out_lines.append(_fmt_endf_line(ZERO66, mat, mf, 0, 99999))
+                kept += 1
+                continue
+            if is_fend(mat, mf, mt):
+                out_lines.append(_fmt_endf_line(ZERO66, mat, 0, 0, 0))
+                kept += 1
+                continue
+            if is_mend(mat, mf, mt):
+                out_lines.append(_fmt_endf_line(ZERO66, 0, 0, 0, 0))
+                kept += 1
+                continue
+
+            # normal record: renumber NS 1..N per (MAT,MF,MT)
+            key = (mat, mf, mt)
+            ns_counter[key] = ns_counter.get(key, 0) + 1
+            new_ns = ns_counter[key]
+
+            out_lines.append(_fmt_endf_line(line[:66], mat, mf, mt, new_ns))
+            kept += 1
+
+    # final single TEND
+    out_lines.append(_fmt_endf_line(ZERO66, -1, 0, 0, 0))
+
+    out_path = os.path.join(out_dir, f"{lib}.{suffix}")
+    with open(out_path, "w", encoding="utf-8", errors="strict") as fh:
+        fh.write("".join(out_lines))
+
+    # optional: lightweight info for the caller (no print by default)
+    return out_path
 
 
 class NDLError(Exception):
