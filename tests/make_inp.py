@@ -31,7 +31,7 @@ njoyver = "2016"
 broad_temp = [300]
 
 # make NJOY input for neutron evaluations
-ndl.makeinput(n_datapath, pattern_n, "n", libname, broad_temp, outpath=outpath)
+ndl.make_input(n_datapath, pattern_n, "n", libname, broad_temp, outpath=outpath)
 # make NJOY input for photo-atomic evaluations
-ndl.makeinput(pa_datapath, pattern_pa, "pa", libname, broad_temp=None,
+ndl.make_input(pa_datapath, pattern_pa, "pa", libname, broad_temp=None,
               outpath=outpath, atomrelax_datapath=ar_datapath)

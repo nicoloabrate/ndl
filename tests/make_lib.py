@@ -23,7 +23,7 @@ datapath = pwd.joinpath("endf")
 inpath = datapath.joinpath("njoyinp")
 
 # generate neutron library
-ndl.buildacelib(str(inpath), str(datapath), "neutrons", "endf",
+ndl.build_ace_lib(str(inpath), str(datapath), "neutrons", "endf",
 <<<<<<< HEAD
                 ["n"], copyflag=True, np=12)
 =======
@@ -31,5 +31,5 @@ ndl.buildacelib(str(inpath), str(datapath), "neutrons", "endf",
 >>>>>>> master
 
 # generate photo-atomic library
-ndl.buildacelib(str(inpath), str(datapath), "photoat", "endf", ["pa"],
+ndl.build_ace_lib(str(inpath), str(datapath), "photoat", "endf", ["pa"],
                 atom_relax="atomic_relax", np=12)

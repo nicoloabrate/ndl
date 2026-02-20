@@ -25,4 +25,4 @@ libname = "endf8"
 # nuclear data library path final location
 ndlpath = "/opt/serpent/xsdata/endfb8/acedir"
 # convert xsdir into xsdata single file
-ndl.convertxsdir(str(out_datapath), proj, libname, ndlpath, currpath=None)
+ndl.convert_xsdir(str(out_datapath), proj, libname, ndlpath, currpath=None)
