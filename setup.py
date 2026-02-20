@@ -8,9 +8,11 @@ Description: Setup for installing rom package.
 import setuptools
 from setuptools import setup, find_packages
 
+requirements = "requirements.txt"
+
 setup(
    name='NDL',
-   version='0.0.2',
+   version='0.0.3',
    author='N. Abrate',
    author_email='nicolo.abrate@polito.it',
    url='git clone https://github.com/nicoloabrate/ndl',
@@ -22,5 +24,6 @@ setup(
    classifiers = ["Programming Language :: Python :: 3",
                   "License :: MIT License",
                   "Operating System :: OS Independent",],
+    install_requires=open(requirements).read().splitlines(),
     python_requires = '>=3.3',
 )
